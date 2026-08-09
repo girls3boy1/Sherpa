@@ -1,6 +1,7 @@
 companyx-dataset-v1.0/
 *.DS_Store
 node_modules/
+src/config/repos.ts
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
