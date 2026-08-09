@@ -1,4 +1,4 @@
-export type ToolName = "vector_search" | "nl2sql" | "knowledge_graph";
+export type ToolName = "vector_search" | "nl2sql" | "knowledge_graph"| "commit_history";
 
 interface Signal {
   phrase: string;
@@ -78,6 +78,23 @@ const SIGNALS: Record<ToolName, Signal[]> = {
     { phrase: "이슈 현황", weight: 3 },
     { phrase: "고객 이슈", weight: 2 },
   ],
+  commit_history: [
+    { phrase: "누가", weight: 3 },
+    { phrase: "언제", weight: 2 },
+    { phrase: "변경 이력", weight: 3 },
+    { phrase: "변경", weight: 2 },
+    { phrase: "수정했", weight: 3 },
+    { phrase: "수정", weight: 2 },
+    { phrase: "코드", weight: 2 },
+    { phrase: "코드 수정", weight: 3 },
+    { phrase: "커밋", weight: 3 },
+    { phrase: "작성자", weight: 3 },
+    { phrase: "바꿨", weight: 3 },
+    { phrase: "고쳤", weight: 3 },
+    { phrase: "히스토리", weight: 3 },
+    { phrase: "최근에", weight: 1 },
+    { phrase: "어디서", weight: 1 },
+  ],
 };
 
 export interface RouteResult {
@@ -89,8 +106,8 @@ export interface RouteResult {
 const DEFAULT_TOOL: ToolName = "vector_search";
 
 export function classify(question: string): RouteResult {
-  const scores: Record<ToolName, number> = { nl2sql: 0, vector_search: 0, knowledge_graph: 0 };
-  const matched: Record<ToolName, string[]> = { nl2sql: [], vector_search: [], knowledge_graph: [] };
+  const scores: Record<ToolName, number> = { nl2sql: 0, vector_search: 0, knowledge_graph: 0, commit_history: 0 };
+  const matched: Record<ToolName, string[]> = { nl2sql: [], vector_search: [], knowledge_graph: [], commit_history: [] };
 
   for (const [tool, signals] of Object.entries(SIGNALS) as [ToolName, Signal[]][]) {
     for (const { phrase, weight } of signals) {
