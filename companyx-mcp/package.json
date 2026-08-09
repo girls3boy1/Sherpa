@@ -7,6 +7,7 @@
     "dev": "tsx src/index.ts",
     "test:tools": "tsx scripts/test-tools.ts",
     "test:router": "tsx scripts/test-router.ts",
+    "evaluate:router": "tsx scripts/evaluate-router.ts",
     "ask": "tsx scripts/ask.ts",
     "evaluate": "tsx scripts/evaluate.ts"
   },

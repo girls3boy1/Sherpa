@@ -1,5 +1,6 @@
 import { server } from "./index.js";
-import { classify, toToolParams, type ToolName } from "./router.js";
+import { toToolParams, type ToolName } from "./router.js";
+import { routeHybrid } from "./semanticRouter.js";
 import { generate } from "./lib/ollama.js";
 
 export interface AskResult {
@@ -14,7 +15,7 @@ export interface AskResult {
  * 전체 흐름: 사용자 질문 -> 라우터 -> MCP 도구 -> PostgreSQL -> LLM 답변 생성
  */
 export async function ask(question: string): Promise<AskResult> {
-  const routed = classify(question);
+  const routed = await routeHybrid(question);
   const params = toToolParams(routed.tool, question);
 
   let toolResult: string;
@@ -29,6 +30,8 @@ export async function ask(question: string): Promise<AskResult> {
 아래 [검색 결과]만 근거로 사용자 질문에 한국어로 간결하게 답변하세요.
 [검색 결과]의 rows/results 배열에 값이 하나라도 있으면 그 값을 반드시 그대로 인용해 답변할 것 — "확인할 수 없다"거나 "데이터가 없다"고 답하지 말 것.
 결과 배열이 완전히 비어 있을 때만 "결과가 없습니다"라고 답하세요. 배열에 없는 내용을 추측해서 지어내지는 마세요.
+개체(고객/직원/제품/프로젝트) 목록을 묻는 질문이면 결과의 name 값(예: Client-D, 홍길동, Product-S1)을 반드시 그대로 나열할 것 — 산업/지역/개수 등 속성으로 요약하지 말 것.
+평균·금액 등 소수점이 있는 숫자는 반올림한 정수로 답할 것 (예: 589.97 → 590).
 
 [질문]
 ${question}
