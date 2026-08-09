@@ -1,0 +1,23 @@
+{
+  "name": "companyx-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "test:tools": "tsx scripts/test-tools.ts",
+    "test:router": "tsx scripts/test-router.ts",
+    "ask": "tsx scripts/ask.ts",
+    "evaluate": "tsx scripts/evaluate.ts"
+  },
+  "dependencies": {
+    "@airmcp-dev/core": "^0.3.0",
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
