@@ -36,12 +36,11 @@ export const commitHistoryTool = defineTool("commit_history", {
 질문: ${question}`;
 
     const rawKeywords = await generate(prompt, { format: "json" });
-    console.log("👉 [Debug] LLM Raw Response:", rawKeywords); // LLM이 실제로 뭐라고 답했는지 터미널에 출력
+    // console.log("👉 [Debug] LLM Raw Response:", rawKeywords); // LLM이 실제로 뭐라고 답했는지 터미널에 출력
     
     let extractedProject = "default";
     let keywords: string[] = [];
 
-    // 방어적 JSON 파싱
     try {
       const parsed = JSON.parse(rawKeywords);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -49,7 +48,6 @@ export const commitHistoryTool = defineTool("commit_history", {
         if (Array.isArray(parsed.keywords)) {
           keywords = parsed.keywords;
         } else {
-          // 최후의 방어: project 값이 아닌 다른 문자열들을 키워드로 간주
           keywords = Object.values(parsed).flat().filter(v => typeof v === "string" && v !== extractedProject) as string[];
         }
       }
@@ -57,37 +55,13 @@ export const commitHistoryTool = defineTool("commit_history", {
       keywords = question.split(" ").filter(w => w.length > 1);
     }
 
-    // try {
-    //   const parsed = JSON.parse(rawKeywords);
-    //   if (Array.isArray(parsed)) {
-    //     keywords = parsed;
-    //   } else if (typeof parsed === "object" && parsed !== null) {
-    //     const excludeKeys = ["키", "키워드", "keyword", "keywords", "단어", "result", "results", "data", "items", "response", "answer"];
-    //     const keys = Object.keys(parsed).filter(k => !excludeKeys.includes(k.toLowerCase()));
-    //     const values = Object.values(parsed).flat();
-    //     keywords = [...keys, ...values].filter(v => typeof v === "string") as string[];
-    //   }
-    // } catch {
-    //   const match = rawKeywords.match(/\[[\s\S]*\]/);
-    //   if (match) {
-    //     try {
-    //       keywords = JSON.parse(match[0]);
-    //     } catch {}
-    //   }
-    // }
-
-    // // 만약 파싱에 실패했거나 비어있다면, 질문에서 명사 형태를 유추하거나 최소한 단어 단위로 쪼갬
-    // if (keywords.length === 0) {
-    //   keywords = question.split(" ").filter(w => w.length > 1);
-    // }
-
     const stopWords = ["수정", "코드", "관련", "어디", "어디서", "볼", "있지", "적용", "변경", "어딨지", "프로젝트", "에서"];
     const filteredKeywords = keywords.filter((kw) => !stopWords.includes(kw));
     // 만약 다 걸러져서 비어버리면 원본 키워드 사용
     const searchKeywords = filteredKeywords.length > 0 ? filteredKeywords : keywords;
 
-    console.log("👉 [Debug] Extracted Project:", extractedProject);
-    console.log("👉 [Debug] Extracted Keywords:", searchKeywords);
+    // console.log("👉 [Debug] Extracted Project:", extractedProject);
+    // console.log("👉 [Debug] Extracted Keywords:", searchKeywords);
 
     const targetRepo = REPO_REGISTRY[extractedProject] || REPO_REGISTRY["default"];
 
