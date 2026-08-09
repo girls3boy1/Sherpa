@@ -69,7 +69,18 @@ function checkAnswer(answer: string, check: Check): boolean | null {
   return check.mode === "all" ? hits.length === (check.keywords?.length ?? 0) : hits.length > 0;
 }
 
-async function main() {
+export interface EvalStats {
+  routerCorrect: number;
+  answerCorrect: number;
+  answerEvaluable: number;
+  total: number;
+}
+
+/**
+ * 30문항 1회 평가. silent=true면 문항별 출력·요약을 생략하고 통계만 반환한다(다회 실행용).
+ * pool은 닫지 않는다(호출자가 관리).
+ */
+export async function evaluateOnce(silent = false): Promise<EvalStats> {
   let routerCorrect = 0;
   let answerCorrect = 0;
   let answerEvaluable = 0;
@@ -89,28 +100,40 @@ async function main() {
       if (ansOk) answerCorrect++;
     }
 
-    const mark = check.mode === "known-issue" ? "SKIP" : ansOk ? "PASS" : "FAIL";
-    rows.push(
-      `[${i + 1}/30] router=${routerOk ? "OK" : "MISS"}(${result.tool}) answer=${mark}  ${q}` +
-        (check.note ? `\n        note: ${check.note}` : "") +
-        `\n        A: ${result.answer.slice(0, 150).replace(/\n/g, " ")}`,
+    if (!silent) {
+      const mark = check.mode === "known-issue" ? "SKIP" : ansOk ? "PASS" : "FAIL";
+      rows.push(
+        `[${i + 1}/30] router=${routerOk ? "OK" : "MISS"}(${result.tool}) answer=${mark}  ${q}` +
+          (check.note ? `\n        note: ${check.note}` : "") +
+          `\n        A: ${result.answer.slice(0, 150).replace(/\n/g, " ")}`,
+      );
+    }
+  }
+
+  if (!silent) {
+    console.log(rows.join("\n"));
+    console.log("\n" + "=".repeat(60));
+    console.log(`라우터 정확도: ${routerCorrect}/${questions.length} (${((routerCorrect / questions.length) * 100).toFixed(1)}%)`);
+    console.log(
+      `최종 답변 정확도: ${answerCorrect}/${answerEvaluable} 평가대상 중 (전체 30개 중 known-issue 1건 제외, ${(
+        (answerCorrect / answerEvaluable) *
+        100
+      ).toFixed(1)}%)`,
     );
   }
 
-  console.log(rows.join("\n"));
-  console.log("\n" + "=".repeat(60));
-  console.log(`라우터 정확도: ${routerCorrect}/${questions.length} (${((routerCorrect / questions.length) * 100).toFixed(1)}%)`);
-  console.log(
-    `최종 답변 정확도: ${answerCorrect}/${answerEvaluable} 평가대상 중 (전체 30개 중 known-issue 1건 제외, ${(
-      (answerCorrect / answerEvaluable) *
-      100
-    ).toFixed(1)}%)`,
-  );
+  return { routerCorrect, answerCorrect, answerEvaluable, total: questions.length };
+}
 
+async function main() {
+  await evaluateOnce(false);
   await pool.end();
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// 이 파일을 직접 실행할 때만 main() 실행 (evaluate-multi에서 import 시엔 실행 안 됨)
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

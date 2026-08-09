@@ -1,3 +1,4 @@
+import "./loadEnv.js";
 import pg from "pg";
 
 const { Pool } = pg;
