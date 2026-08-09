@@ -8,7 +8,7 @@
 
 const OLLAMA_HOST = process.env.OLLAMA_HOST ?? "http://localhost:11434";
 const EMBED_MODEL = process.env.EMBED_MODEL ?? "bge-m3";
-const LLM_MODEL = process.env.LLM_MODEL ?? "qwen2.5:7b";
+const LLM_MODEL = process.env.LLM_MODEL ?? "gemma4:e2b";
 
 export async function embed(text: string): Promise<number[]> {
   const res = await fetch(`${OLLAMA_HOST}/api/embeddings`, {
