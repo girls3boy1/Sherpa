@@ -6,6 +6,7 @@
  * 데이터셋 위치: 기본은 프로젝트 상위의 ../companyx-dataset-v1.0.
  * 다른 경로면 DATASET_DIR 환경변수로 지정한다.
  */
+import "./loadEnv.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
