@@ -16,7 +16,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# lib/  ← 제거: TypeScript 소스 src/lib/ 를 통째로 무시해 유실을 유발
 lib64/
 parts/
 sdist/
