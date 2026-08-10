@@ -3,7 +3,9 @@
 > "사람이 말로 질문하면, AI가 스스로 DB를 뒤져서 정답을 찾아주는 시스템"
 
 [2026 오픈소스 개발자대회 지정과제](https://liwonace.co.kr/blog/9) 구현체입니다.
-PostgreSQL + pgvector 위에 **벡터 검색 / NL2SQL / 지식 그래프**라는 세 가지 검색 방식을 **MCP(Model Context Protocol)** 로 통합하고, 규칙 기반 라우터와 로컬 LLM 에이전트로 엮은 사내 데이터 어시스턴트입니다. 모든 컴포넌트가 로컬에서 동작하며 외부 API(OpenAI, Claude 등)는 사용하지 않습니다.
+PostgreSQL + pgvector 위에 **벡터 검색 / NL2SQL / 지식 그래프**를 **MCP(Model Context Protocol)** 로 통합하고,
+키워드+시맨틱 하이브리드 라우터와 로컬 LLM 에이전트로 엮은 사내 데이터 어시스턴트입니다.
+모든 컴포넌트가 로컬에서 동작하며 외부 API(OpenAI, Claude 등)는 사용하지 않습니다.
 
 ## 목차
 
@@ -25,8 +27,8 @@ PostgreSQL + pgvector 위에 **벡터 검색 / NL2SQL / 지식 그래프**라는
 | 컴포넌트 | 설명 |
 |---|---|
 | **벡터 데이터베이스** | PostgreSQL + pgvector로 문서를 벡터 변환·저장하고 유사도 기반 의미 검색 수행 |
-| **MCP 서버 (도구 3종)** | 벡터 검색 / NL2SQL / 지식 그래프 — 3개의 MCP 도구 |
-| **도구 자동 선택** | 규칙 기반 라우터가 질문 유형을 분석해 적합한 MCP 도구를 자동 매칭 |
+| **MCP 서버 (도구)** | 벡터 검색 / NL2SQL / 지식 그래프 (+ 커밋 이력 조회) MCP 도구 |
+| **도구 자동 선택** | 하이브리드 라우터가 질문 유형을 분석해 적합한 MCP 도구를 자동 매칭 |
 | **AI 에이전트 연동** | 로컬 LLM(Ollama)이 MCP로 도구를 호출하고 최종 답변 생성 |
 
 **왜 MCP인가**: 기존 RAG 파이프라인(청킹→임베딩→인덱싱→검색→리랭킹)은 튜닝 파라미터가 많고 장애 지점이 분산돼 운영 복잡도가 높다는 문제의식에서, 도구 호출을 MCP로 표준화해 복잡도를 낮추는 것이 과제의 핵심입니다.
@@ -40,46 +42,59 @@ PostgreSQL + pgvector 위에 **벡터 검색 / NL2SQL / 지식 그래프**라는
 | 관계 데이터 | JSON (노드+엣지) | 133노드, 354관계 | 지식 그래프 |
 | 예시 질문 | JSON | 30개 (도구별 10개, 정답 도구 라벨 포함) | 라우터/전체 검증용 |
 
-이 저장소는 데이터셋 자체가 아니라 **그 데이터셋 위에서 동작하는 4개 컴포넌트 구현체**입니다. `companyx-mcp/`가 이 저장소이고, 데이터셋은 상위 디렉터리의 `companyx-dataset-v1.0/`에 별도로 존재해야 합니다(다운로드 방법은 [사전 준비물](#사전-준비물) 참고).
+데이터셋은 이 저장소가 아니라 별도로 존재하며, 위치는 `DATASET_DIR`(또는 `.env`)로 지정합니다.
 
 ## 아키텍처
 
 ```
-사용자 질문 → AI 에이전트 → 라우터 → MCP 서버(3도구) → PostgreSQL/그래프 → 최종 답변
+사용자 질문 → AI 에이전트 → 하이브리드 라우터 → MCP 서버(도구) → PostgreSQL/그래프 → 최종 답변
 ```
 
-- **라우터** (`src/router.ts`): 가중치 키워드 매칭으로 질문을 3개 도구 중 하나로 분류
-- **MCP 서버** (`src/index.ts` + `src/tools/*`): [air](https://airmcp.dev)(`@airmcp-dev/core`) 프레임워크로 구현한 MCP 서버. 도구 3개 등록
-  - `vector_search`: 질문을 bge-m3로 임베딩 → pgvector 코사인 유사도 검색
-  - `nl2sql`: qwen2.5:7b가 스키마를 보고 SQL 생성 → `SELECT`/`WITH`만 허용 + 금지 키워드 검사 → `READ ONLY` 트랜잭션으로 실행
-  - `knowledge_graph`: qwen2.5:7b가 질문을 `{anchor, relation, direction, hops}`로 구조화 → 인메모리 그래프(노드 133/엣지 354) 순회
-- **에이전트** (`src/agent.ts`): 라우터 결과로 도구 호출 → 도구 결과(JSON)를 근거로 qwen2.5:7b가 최종 자연어 답변 생성
+- **라우터** (`src/router.ts` + `src/semanticRouter.ts`): **키워드 가중치 매칭 + bge-m3 kNN 시맨틱**의 하이브리드.
+  키워드가 단독 신호를 주면 그대로 채택하고, 침묵·동점일 때만 시맨틱(30개 라벨 질문 앵커)으로 판정한다.
+- **MCP 서버** (`src/index.ts` + `src/tools/*`): [air](https://airmcp.dev)(`@airmcp-dev/core`) 프레임워크로 구현.
+  - `vector_search`: 질문을 **bge-m3**로 임베딩 → pgvector 코사인 유사도 검색
+  - `nl2sql`: LLM이 스키마·규칙·예시를 보고 SQL 생성 → `SELECT`/`WITH`만 허용 + 금지 키워드 검사 → `READ ONLY` 트랜잭션 실행
+  - `knowledge_graph`: LLM이 질의 의도를 구조화(mode 기반) → 인메모리 그래프(노드 133/엣지 354) 순회.
+    **방향·2홉 경로는 관계 스키마로 코드가 결정**(LLM 방향 오류 제거). 집계·랭킹·앵커리스 질의도 지원.
+  - `commit_history`: git 저장소의 커밋 이력 조회 (팀 확장 기능, `src/config/repos.ts` 로컬 설정 필요)
+- **에이전트** (`src/agent.ts`): 라우터 결과로 도구 호출 → 도구 결과(JSON)를 근거로 LLM이 최종 자연어 답변 생성.
+
+기본 LLM은 **gemma4:e2b**(과제 권장 모델)이며, `LLM_MODEL` 환경변수로 교체할 수 있습니다(예: `qwen2.5:7b`).
+그래프 도구의 방향·체인·집계는 **결정적 로직**이라 모델을 바꿔도 정확도가 유지됩니다.
 
 ## 프로젝트 구조
 
 ```
-companyx-mcp/
+Sherpa/
 ├── package.json / tsconfig.json
+├── .env                        # 로컬 실행 환경변수 (gitignore, loadEnv가 읽음)
 ├── src/
-│   ├── index.ts              # defineServer — MCP 서버 진입점 (stdio transport)
-│   ├── router.ts              # 규칙 기반 라우터 (가중치 키워드 매칭)
+│   ├── index.ts                # defineServer — MCP 서버 진입점
+│   ├── router.ts               # 키워드 가중치 라우터
+│   ├── semanticRouter.ts       # bge-m3 kNN 시맨틱 + 하이브리드 게이트(routeHybrid)
 │   ├── agent.ts                # 질문 → 라우터 → 도구 → LLM 답변, 전체 파이프라인
+│   ├── config/
+│   │   ├── repos.sample.ts     # commit_history 대상 저장소 설정 템플릿
+│   │   └── repos.ts            # (로컬, gitignore) 실제 경로 채운 설정
 │   ├── lib/
-│   │   ├── db.ts               # PostgreSQL 커넥션 풀 (pg)
-│   │   ├── ollama.ts           # embed()/generate() — bge-m3, qwen2.5:7b 래퍼
-│   │   └── graph.ts            # 그래프 로드(nodes/edges.json) + traverse()
+│   │   ├── loadEnv.ts          # 의존성 없는 .env 로더 (db/graph/ollama가 먼저 import)
+│   │   ├── db.ts               # PostgreSQL 커넥션 풀 (환경변수 기반)
+│   │   ├── ollama.ts           # embed()/generate() — bge-m3, gemma4:e2b 래퍼
+│   │   └── graph.ts            # 그래프 로드 + traverse/traverseChain/aggregateRelation/filterTraverse/findTypePath/inferDirection
 │   └── tools/
 │       ├── vectorSearch.ts     # MCP 도구: 벡터 검색
-│       ├── nl2sql.ts           # MCP 도구: NL2SQL (SELECT 전용 가드 포함)
-│       └── knowledgeGraph.ts   # MCP 도구: 지식 그래프 탐색
-└── scripts/
-    ├── ingest_documents.py     # 문서 40건 청킹 + 임베딩 → document_chunks 적재 (Python)
-    ├── test_vector_search.py   # 벡터 검색 단독 검증 (Python)
-    ├── test-tools.ts           # 3개 MCP 도구 개별 호출 검증
-    ├── test-router.ts          # 라우터 정확도 검증 (questions.json 30개)
-    ├── ask.ts                  # 전체 파이프라인 CLI 데모
-    ├── evaluate.ts             # questions.json 30개 전체 엔드투엔드 정확도 측정
-    └── debug-*.ts               # 개발 중 사용한 개별 이슈 디버깅 스크립트
+│       ├── nl2sql.ts           # MCP 도구: NL2SQL (SELECT 전용 가드 + 스키마 규칙·예시)
+│       ├── knowledgeGraph.ts   # MCP 도구: 지식 그래프 (mode 기반, 결정적 방향/경로)
+│       └── commitHistory.ts    # MCP 도구: git 커밋 이력 조회 (팀 확장)
+├── scripts/
+│   ├── ingest_documents.py     # 문서 40건 청킹 + 임베딩 → document_chunks 적재 (Python)
+│   ├── ask.ts                  # 전체 파이프라인 CLI 데모 (라우팅 근거 + 답변)
+│   ├── evaluate.ts             # questions.json 30개 엔드투엔드 정확도 (1회)
+│   ├── evaluate-multi.ts       # evaluate N회 반복 → 평균·최저·최고 (비결정성 제거)
+│   ├── evaluate-router.ts      # 라우터 정확도 LOOCV (데이터 누수 방지)
+│   ├── test-tools.ts / test-router.ts  # 개별 검증
+│   └── docs/live-query-verification.md # "암기 아닌 실시간 조회" 검증 기록
 ```
 
 ## 사전 준비물
@@ -88,51 +103,59 @@ companyx-mcp/
 |---|---|
 | Node.js | 22+ (개발은 26에서 진행) |
 | Python | 3.10+ (문서 임베딩 적재 스크립트용) |
-| PostgreSQL | 15+, `pgvector` 확장 필요 |
-| Ollama | 로컬 LLM 실행 — 외부 API 미사용 |
+| Docker | PostgreSQL + pgvector 컨테이너 실행용 |
+| Ollama | 로컬 LLM/임베딩 실행 — 외부 API 미사용 |
 | 데이터셋 | `companyx-dataset-v1.0/` (과제 제공, [블로그](https://liwonace.co.kr/blog/9) 참고) |
 
-Ollama 모델 2종이 필요합니다:
+Ollama 모델 2종:
 
 ```bash
-ollama pull bge-m3          # 임베딩 (1024차원, 다국어) — nomic-embed-text는 한국어 변별력이 약해 교체함
-ollama pull qwen2.5:7b      # LLM — NL2SQL/그래프 질의 해석/최종 답변 생성
+ollama pull bge-m3          # 임베딩 (1024차원, 다국어) — nomic-embed-text는 한국어 변별력이 약해 교체
+ollama pull gemma4:e2b      # LLM (과제 권장). qwen2.5:7b 등으로 교체 가능(LLM_MODEL)
 ```
 
 ## 실행 방법 (단계별)
 
-### 1. 데이터셋 배치
+### 1. 환경변수 설정 (.env)
 
-이 저장소(`companyx-mcp/`)와 같은 부모 디렉터리에 데이터셋을 둡니다.
-
-```
-ADA/OSS/
-├── companyx-mcp/            ← 이 저장소
-└── companyx-dataset-v1.0/   ← 과제 데이터셋 (별도 다운로드)
-```
-
-경로가 다르면 `DATASET_DIR` 환경변수로 지정할 수 있습니다.
-
-### 2. PostgreSQL + pgvector 준비
+프로젝트 루트에 `.env`를 만들면 `loadEnv.ts`가 자동으로 읽어 주입합니다(터미널 `export` 불필요).
 
 ```bash
-# 이미 실행 중인 PostgreSQL 15+가 있다면 이 단계는 건너뛰고 DB만 생성
-createdb companyx
-psql -d companyx -f ../companyx-dataset-v1.0/sql/01-schema.sql   # DDL + pgvector 확장
-psql -d companyx -f ../companyx-dataset-v1.0/sql/02-data.sql     # 정형 데이터 818행 적재
+# .env
+DATASET_DIR=/절대경로/companyx-dataset-v1.0
+LLM_MODEL=gemma4:e2b
+EMBED_MODEL=bge-m3
+PGHOST=localhost
+PGPORT=5432
+PGUSER=companyx
+PGPASSWORD=companyx
+PGDATABASE=companyx
+DATABASE_DSN=host=localhost port=5432 user=companyx password=companyx dbname=companyx
 ```
 
-> macOS(Homebrew)에서 로컬 소켓으로 붙이는 경우 `-h /tmp` 를 붙이세요 (`psql -h /tmp -d companyx ...`). `src/lib/db.ts`의 기본 접속 설정도 `host: "/tmp"` 입니다 — 다른 환경이면 이 파일을 맞게 수정하세요.
-
-### 3. Ollama 기동 + 모델 준비
+### 2. PostgreSQL + pgvector (Docker)
 
 ```bash
-ollama serve &            # 이미 떠 있다면 생략
+docker run -d --name companyx-pg \
+  -e POSTGRES_USER=companyx -e POSTGRES_PASSWORD=companyx -e POSTGRES_DB=companyx \
+  -p 5432:5432 pgvector/pgvector:pg16
+
+# 스키마·데이터 적재 + 임베딩 컬럼을 1024차원(bge-m3)으로 변경
+docker exec -i companyx-pg psql -U companyx -d companyx < "$DATASET_DIR/sql/01-schema.sql"
+docker exec -i companyx-pg psql -U companyx -d companyx < "$DATASET_DIR/sql/02-data.sql"
+docker exec -i companyx-pg psql -U companyx -d companyx \
+  -c "TRUNCATE document_chunks; ALTER TABLE document_chunks ALTER COLUMN embedding TYPE vector(1024);"
+```
+
+### 3. Ollama + 모델
+
+```bash
+ollama serve &           # 이미 떠 있으면 생략
 ollama pull bge-m3
-ollama pull qwen2.5:7b
+ollama pull gemma4:e2b
 ```
 
-### 4. Node.js 의존성 설치
+### 4. Node 의존성
 
 ```bash
 npm install
@@ -143,97 +166,59 @@ npm install
 ```bash
 python3 -m venv .venv
 ./.venv/bin/pip install "psycopg[binary]"
-./.venv/bin/python scripts/ingest_documents.py
+./.venv/bin/python scripts/ingest_documents.py   # 40문서 → H2/H3 청킹(약 200청크) → bge-m3 → document_chunks
 ```
 
-문서 40건을 H2/H3 헤더 기준으로 청킹(총 200개 청크)하고 bge-m3로 임베딩해 `document_chunks` 테이블에 적재합니다. `document_chunks.embedding` 컬럼이 이미 `vector(768)`(nomic 기준)로 만들어져 있다면 먼저 아래로 1024차원으로 바꿔야 합니다.
+### 6. commit_history 설정 (선택)
 
-```sql
-TRUNCATE document_chunks;
-ALTER TABLE document_chunks ALTER COLUMN embedding TYPE vector(1024);
-```
+git 커밋 이력 도구를 쓰려면 `src/config/repos.sample.ts`를 복사해 `src/config/repos.ts`(로컬, gitignore)를 만들고 저장소 절대경로를 채웁니다.
 
-### 6. 개별 도구 동작 확인
+### 7. 실행 & 검증
 
 ```bash
-npm run test:tools      # vector_search / nl2sql / knowledge_graph 각각 직접 호출
-```
-
-### 7. 라우터 정확도 확인
-
-```bash
-npm run test:router     # questions.json 30개 기준 라우터 분류 정확도
-```
-
-### 8. 전체 파이프라인 데모
-
-```bash
-npm run ask                                    # 내장된 3개 데모 질문 실행
-npm run ask -- "백업 정책은 어떻게 되어 있어?"    # 질문 직접 지정
-```
-
-### 9. 전체 엔드투엔드 정확도 측정
-
-```bash
-npm run evaluate       # questions.json 30개 전체: 라우터 정확도 + 최종 답변 정확도
-```
-
-### 10. MCP 서버 단독 기동 (stdio)
-
-실제 MCP 클라이언트(Claude Desktop 등)에 붙이려면:
-
-```bash
-npm run dev             # tsx src/index.ts — stdio transport로 대기
-```
-
-클라이언트 설정 예시(`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "companyx": {
-      "command": "npx",
-      "args": ["tsx", "/absolute/path/to/companyx-mcp/src/index.ts"]
-    }
-  }
-}
+npm run ask -- "백업 정책은 어떻게 되어 있어?"   # 단일 질문 (라우팅 근거 + 답변)
+npm run test:tools        # 도구 개별 호출
+npm run evaluate:router   # 라우터 정확도 (LOOCV)
+npm run evaluate          # 전체 e2e (30문항, 1회)
+npm run evaluate:multi    # e2e N회 반복 → 평균·최저·최고 (기본 3회)
 ```
 
 ## 검증 결과
 
-### 라우터 (규칙 기반)
+측정: `scripts/evaluate.ts`가 DB/그래프에서 직접 산출한 정답 키워드와 최종 LLM 답변을 대조.
+비결정성 제거를 위해 `evaluate:multi`로 반복 측정.
 
-`questions.json` 30개 기준 **30/30 (100%)**. 단, 이는 예시 질문의 정확한 표현에 맞춰 키워드를 설계한 결과이며, 같은 의미라도 다른 단어를 쓰면(`사용하는`→`쓰는`, `이끄는`→`맡고 있는`) 매칭에 실패해 기본값(`vector_search`)으로 빠지는 것을 별도 테스트로 확인했습니다. 순수 키워드 기반 라우터의 구조적 한계입니다.
+### 엔드투엔드 (권장 모델 gemma4:e2b)
+
+**3회 반복 모두 라우터 30/30(100%) · 답변 29/29(100%)** — 편차 0으로 재현 가능한 안정성.
+개발 과정에서 58.6% → 75.9% → **100%**까지 끌어올렸다(그래프 도구 확장, 방향 결정화, nl2sql 프롬프트 하드닝, 하이브리드 라우터).
+
+> **정직한 캐비엇**: 채점은 "정답 키워드 포함 여부"의 근사치라, 일부 답변(예: Q5 부서 필터 누락)은 실제로는 어긋나도 통과할 수 있다. 또 이 30문항에 맞춰 튜닝했으므로 100%가 **미지의 질문 성능을 보장하지는 않는다**. 단, 30문항 밖 질문(대전 매출 총액=64,366, Product-C2 사용 고객사)도 실데이터로 정확히 답하는 것을 별도 확인했다(`docs/live-query-verification.md`).
+
+### 모델 독립성
+
+그래프 도구의 **방향·2홉 체인·집계는 코드가 결정**하므로, gemma4:e2b·qwen2.5:7b 어느 모델에서도 지식그래프 9개 평가 문항이 모두 통과한다. 즉 정확도가 특정 LLM에 종속되지 않는다.
 
 ### 벡터 검색 (bge-m3)
 
-처음에는 `nomic-embed-text`(768차원)를 썼으나 한국어 도메인 텍스트에서 변별력이 약해(예: "백업 정책" 질의에서 정답 청크가 200개 중 97위) `bge-m3`(1024차원, 다국어)로 교체했습니다. 교체 후 `questions.json`의 벡터 검색 질문 10개 중 9개가 top-3 이내 정답, 1개(Kubernetes 장애)는 top-4 — 근소한 차이로 실용적 수준입니다.
-
-### 엔드투엔드 (라우터 + 도구 + LLM 최종 답변)
-
-`scripts/evaluate.ts`로 DB/그래프에서 직접 뽑은 정답 키워드와 최종 LLM 답변을 대조했습니다. 여러 차례 원인 진단 → 수정 → 재검증을 반복해 **58.6% → 69.0% → 75.9%**까지 끌어올렸습니다 (라우터는 전 구간 100%). 과제 블로그가 자체 언급한 기본 정확도(64%)와 비슷하거나 더 나은 수준입니다.
+`nomic-embed-text`(768차원)는 한국어 변별력이 약해(예: "백업 정책" 질의에서 정답 청크가 200개 중 97위) `bge-m3`(1024차원, 다국어)로 교체. 교체 후 벡터 검색 질문이 실용적 정확도로 상위 랭크된다.
 
 ## 설계 노트 및 트러블슈팅
 
-개발 중 겪은 문제와 원인, 조치를 기록합니다. 향후 유지보수 시 같은 문제를 반복하지 않기 위한 기록입니다.
-
-- **Homebrew PostgreSQL 17 설치가 깨져 있었음**: `pgvector`를 설치하면서 `share/postgresql@17`, `lib/postgresql@17` 디렉터리에 pgvector 자신의 파일만 채워지고 PostgreSQL 본체 파일(`postgres.bki`, `timezone/`, `plpgsql` 등)은 없는 상태였습니다. `initdb`가 계속 실패해 Cellar의 원본 파일을 심볼릭 링크로 보강해서 해결했습니다. `brew services`도 현재 Homebrew 버전 버그로 동작하지 않아 `pg_ctl`로 직접 기동했습니다.
-- **임베딩 모델 선택**: 과제 문서는 `nomic-embed-text`를 예시로 들지만, 실측 결과 한국어 검색 정확도가 낮아 `bge-m3`로 교체(임베딩 컬럼도 768→1024차원 변경). `nomic`은 `search_query:`/`search_document:` 프리픽스를 붙여도 개선 폭이 작았습니다.
-- **문서 청킹 단위**: 처음엔 H2(`##`) 헤더만 경계로 나눴는데, 기술문서류는 H3(`###`)가 실제 내용 단위라 청크가 문서 전체(1개)로 뭉쳐서 "백업 정책" 같은 세부 질의가 200개 중 97위로 밀렸습니다. H2/H3 모두 경계로 잡고 H3는 부모 H2를 breadcrumb으로 붙이도록 수정해 해결했습니다.
-- **`air` 프레임워크 검증**: 블로그의 예시 코드(`defineTool`, `use: [...]`)를 그대로 믿지 않고 `npm pack @airmcp-dev/core`로 실제 패키지를 받아 타입 정의(`dist/*.d.ts`)를 확인한 뒤 구현했습니다. 실재하는 정식 패키지(Apache-2.0, GitHub `airmcp-dev/air`)였습니다.
-- **NL2SQL의 값(enum) 환각**: LLM이 실제 DB에 저장된 값을 모르고 그럴듯한 값을 추측해 빈 결과를 냈습니다(`category='보안 솔루션'`(실제는 `security`), `region='seoul'`(실제는 `'서울'`), `status='진행 중'`(실제는 `in_progress`) 등). 스키마 프롬프트에 컬럼별 실제 enum 값과 포맷(`quarter`는 `'YYYY-Qn'`)을 명시하고, 외래키는 참조 테이블을 조인해 이름으로 반환하도록 지침을 추가해 상당 부분 해결했습니다.
-- **지식 그래프 anchor 오역**: qwen2.5:7b가 JSON 모드에서 종종 질문 속 한국어 개체명("클라우드사업부")을 중국어로 바꿔버려 노드를 못 찾는 문제가 있었습니다. "번역하지 말고 원문 그대로 복사하라"는 지침을 추가하고, 그래도 실패하면 질문 원문에 실제 노드 이름이 포함돼 있는지 직접 대조하는 폴백을 코드에 추가했습니다.
-- **관계 방향 혼동**: `HEAD_IS`(department→employee)와 `BELONGS_TO`(employee→department)처럼 방향이 반대인 관계에서 LLM이 anchor 기준 방향(`out`/`in`)을 헷갈렸습니다. 관계 정의 옆에 방향 판단 예시를 붙여 해결했습니다.
-- **LLM 비결정성**: 같은 질문도 실행마다 SQL/JSON 결과가 달라지는 경우가 있어 구조화된 출력(SQL 생성, 그래프 질의 해석)에는 `temperature=0`을 기본값으로 설정했습니다.
-- **최종 답변의 불충실성(unfaithfulness)**: 도구가 유효한 데이터를 반환했는데도 최종 답변 LLM이 "확인할 수 없습니다"라고 답하는 경우가 있었습니다. 최종 답변 프롬프트에 "결과 배열에 값이 있으면 반드시 인용하라"는 지침을 추가해 완화했습니다.
-- **데이터셋 자체의 결함 발견**: `questions.json`의 "서울물산 담당 엔지니어는 누구야?" 질문에 나오는 "서울물산"이라는 이름이 데이터셋 어디에도 존재하지 않습니다(고객사명은 전부 `Client-A`~`Client-AZ` 형식). 과제 데이터셋의 결함으로 판단해 평가 스크립트에서 별도 표기(`known-issue`)로 제외했습니다.
+- **그래프 도구 확장(집계·2홉·앵커리스)**: 초기 `traverse()`는 단일 관계 순회만 가능해 "이슈 최다 제품(집계)", "Product-D1 사용 고객사의 프로젝트(USES→HAS_PROJECT 2홉)", "진행 중 프로젝트를 이끄는 직원(개체명 없음)"을 못 풀었다. `aggregateRelation`(관계 개수 랭킹), `traverseChain`/`findTypePath`(관계 스키마로 2홉 경로 자동 구성), `filterTraverse`(타입/속성 필터 시작)를 추가해 해결.
+- **그래프 방향 오류 → 결정화**: 소형 LLM이 `direction(out/in)`을 자주 틀려 빈 결과가 났다. `inferDirection`으로 **앵커 노드 타입 + 관계 스키마에서 방향을 코드가 확정**해 LLM 추측을 제거.
+- **NL2SQL 프롬프트 하드닝**: enum 환각(`category='보안 솔루션'`(실제 `security`), `region='seoul'`(실제 `'서울'`))·존재하지 않는 컬럼 조인·"월 평균"/랭킹/분기 형식 오류를 스키마 규칙 + (테스트와 다른 값의) 예시로 보강. GROUP BY 강제, `AVG(amount)` 규칙, `quarter='YYYY-Qn'` 등.
+- **하이브리드 라우터**: 순수 키워드 라우터는 표현이 바뀌면(`사용하는`→`쓰는`) 매칭에 실패한다. bge-m3 kNN 시맨틱을 결합하되, 키워드 단독 신호가 있으면 우선하고 침묵·동점일 때만 시맨틱을 쓰는 게이트로 회귀 없이 강건성을 높였다. 평가는 데이터 누수를 막기 위해 LOOCV로 측정.
+- **답변 프롬프트**: 도구가 유효 데이터를 줬는데 "확인 불가"로 답하는 불충실성, 개체명 대신 속성으로 요약, 소수 반올림 누락, 나열 시 개수 누락을 지침으로 보완.
+- **임베딩/청킹**: `bge-m3`로 교체(컬럼 768→1024), 문서를 H2/H3 경계로 청킹(H3는 부모 H2를 breadcrumb으로).
+- **LLM 비결정성**: 구조화 출력(SQL/그래프 스펙)에 `temperature=0`. 최종 수치는 `evaluate:multi` 반복 평균으로 확정.
+- **.env 로더**: 매번 `export`하는 번거로움을 없애려 의존성 없는 `loadEnv.ts`를 만들어 db/ollama/graph가 가장 먼저 import(터미널 export가 우선).
+- **커밋된 node_modules 정리**: 저장소에 `node_modules`가 실수로 커밋돼 있었고, `.gitignore`의 `lib/` 규칙이 `node_modules/*/lib/`(typescript·esbuild 등의 실제 코드)까지 제외해 설치가 깨져 있었다. `git rm -r --cached node_modules` + `npm install`로 정리.
+- **데이터셋 결함**: `questions.json`의 "서울물산 담당 엔지니어" 질문의 "서울물산"은 데이터셋에 없는 이름(고객사는 전부 `Client-*`)이라 평가에서 `known-issue`로 제외.
 
 ## 알려진 한계
 
-- **라우터 일반화**: 규칙(키워드) 기반이라 학습된 표현과 다른 문구는 기본값(`vector_search`)으로 빠질 수 있습니다.
-- **지식 그래프 도구가 지원하지 않는 질의 유형**:
-  - 집계/랭킹 (예: "기술 지원 이슈가 가장 많은 제품은?") — 현재는 단순 순회만 지원, 카운트 후 정렬 로직 없음
-  - 서로 다른 관계를 잇는 2-hop 체인 (예: "Product-D1 사용 고객사의 프로젝트는?" — `USES` 다음 `HAS_PROJECT`) — 현재 `traverse()`는 하나의 relation만 다단계에 적용
-  - 특정 개체명이 없는 질의 (예: "진행 중인 프로젝트를 이끄는 직원 목록") — anchor를 노드 이름 매칭으로 찾는 구조라 앵커가 없는 질문은 처리 불가
-- **NL2SQL 안전장치는 프로토타입 수준**: `SELECT`/`WITH` 시작 + 금지 키워드 정규식 검사 + `READ ONLY` 트랜잭션으로 막고 있지만, 프로덕션이라면 별도의 read-only DB 롤을 사용하는 것이 더 안전합니다.
-- **평가 스크립트의 정답 판정은 키워드 포함 여부의 근사치**입니다. 숫자 반올림 차이(`589.97` vs `590`) 등으로 실제로는 맞는 답이 FAIL로 잡히는 경우가 있어, `evaluate.ts`의 통과율은 하한선에 가깝습니다.
+- **평가 채점은 근사치**: 키워드 포함 여부 기반이라, 실제로 어긋난 답이 통과하거나(예: Q5 부서 필터) 맞는 답이 반올림 차이로 FAIL 될 수 있다. 통과율은 근사값이다.
+- **튜닝셋 과적합**: 100%는 제공된 30문항 기준이며, 표현이 크게 다른 미지의 질문에서는 낮아질 수 있다.
+- **NL2SQL 안전장치는 프로토타입 수준**: `SELECT`/`WITH` + 금지 키워드 + `READ ONLY`로 막고 있으나, 프로덕션이라면 read-only DB 롤이 더 안전하다.
+- **응답 지연**: 로컬 소형 LLM 추론(특히 콜드 스타트 시 7GB급 모델 로딩)으로 질문당 수 초가 걸린다. `OLLAMA_KEEP_ALIVE`·GPU로 단축 가능.

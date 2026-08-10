@@ -9,7 +9,8 @@
     "test:router": "tsx scripts/test-router.ts",
     "evaluate:router": "tsx scripts/evaluate-router.ts",
     "ask": "tsx scripts/ask.ts",
-    "evaluate": "tsx scripts/evaluate.ts"
+    "evaluate": "tsx scripts/evaluate.ts",
+    "evaluate:multi": "tsx scripts/evaluate-multi.ts"
   },
   "dependencies": {
     "@airmcp-dev/core": "^0.3.0",
