@@ -71,7 +71,12 @@ export async function classifySemantic(
     .sort((x, y) => y.sim - x.sim)
     .slice(0, k);
 
-  const votes: Record<ToolName, number> = { nl2sql: 0, vector_search: 0, knowledge_graph: 0 };
+  const votes: Record<ToolName, number> = {
+    nl2sql: 0,
+    vector_search: 0,
+    knowledge_graph: 0,
+    commit_history: 0,
+  };
   for (const n of near) votes[n.tool] += n.sim;
 
   const ranked = (Object.entries(votes) as [ToolName, number][]).sort((a, b) => b[1] - a[1]);
